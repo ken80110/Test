@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>課表預約</title>
+  <style>
+    body{font-family:system-ui,"Microsoft JhengHei",sans-serif;margin:16px}
+    .card{border:1px solid #ddd;border-radius:12px;padding:12px;margin:10px 0}
+    button{padding:10px 12px;border-radius:10px;border:1px solid #ccc;background:#fff;cursor:pointer}
+    button.primary{border:0;background:#06C755;color:#fff}
+    .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+    input,textarea{width:100%;padding:10px;border-radius:10px;border:1px solid #ccc}
+    .muted{color:#666;font-size:13px}
+  </style>
+</head>
+<body>
+  <h2>課表預約（LIFF）</h2>
+
+  <div class="card">
+    <div class="muted">1) 選日期</div>
+    <input id="date" type="date"/>
+    <div style="margin-top:10px;display:flex;gap:10px">
+      <button id="btnToday">今天</button>
+      <button id="btnTomorrow">明天</button>
+      <button id="btnLoad" class="primary">查空檔</button>
+    </div>
+    <div id="user" class="muted" style="margin-top:10px"></div>
+  </div>
+
+  <div class="card">
+    <div class="muted">2) 資料（選填）</div>
+    <input id="name" placeholder="姓名（選填）"/>
+    <textarea id="note" rows="2" placeholder="備註（選填）" style="margin-top:8px"></textarea>
+  </div>
+
+  <div class="card">
+    <div class="muted">3) 可預約時段</div>
+    <div id="slots" class="grid" style="margin-top:10px"></div>
+    <div id="status" class="muted" style="margin-top:10px"></div>
+  </div>
+
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script>
+    const LIFF_ID = "填入你的LIFF_ID";
+    let lineUserId = null;
+
+    const elDate = document.getElementById("date");
+    const elSlots = document.getElementById("slots");
+    const elStatus = document.getElementById("status");
+    const elUser = document.getElementById("user");
+
+    const fmt = d => d.toISOString().slice(0,10);
+    const setStatus = m => elStatus.textContent = m;
+    const clearSlots = () => elSlots.innerHTML = "";
+
+    async function initLIFF(){
+      try{
+        await liff.init({ liffId: LIFF_ID });
+        if(!liff.isLoggedIn()){ liff.login(); return; }
+        const p = await liff.getProfile();
+        lineUserId = p.userId;
+        elUser.textContent = `LINE：${p.displayName}（已登入）`;
+        document.getElementById("name").value = p.displayName || "";
+      }catch(e){
+        elUser.textContent = "LIFF 初始化失敗：" + String(e);
+      }
+    }
+
+    async function api(body){
+      const r = await fetch(location.href, { // 同一個 Apps Script Web App URL
+        method: "POST",
+        headers: { "Content-Type":"text/plain;charset=utf-8" },
+        body: JSON.stringify(body)
+      });
+      return r.json();
+    }
+
+    async function loadSlots(){
+      const date = elDate.value;
+      if(!date) return setStatus("請先選日期");
+      setStatus("查詢中..."); clearSlots();
+
+      const data = await api({ action:"slots", date });
+      if(data.error){ setStatus("查詢失敗：" + data.error); return; }
+
+      if(!data.slots?.length){ setStatus("當天沒有可預約空檔"); return; }
+
+      setStatus(`共 ${data.slots.length} 個空檔（每堂 ${data.durationMin} 分鐘）`);
+      data.slots.forEach(s=>{
+        const btn = document.createElement("button");
+        btn.innerHTML = `${s.start} <span class="muted">→ ${s.end}</span>`;
+        btn.onclick = ()=>book(date, s.start);
+        elSlots.appendChild(btn);
+      });
+    }
+
+    async function book(date, start){
+      if(!lineUserId){ alert("尚未取得 LINE userId"); return; }
+      const name = document.getElementById("name").value || "";
+      const note = document.getElementById("note").value || "";
+      if(!confirm(`確認預約？\n${date} ${start}`)) return;
+
+      setStatus("預約中...");
+      const data = await api({ action:"book", date, start, lineUserId, name, note });
+
+      if(!data.ok){
+        alert("預約失敗：" + (data.error || "unknown"));
+        setStatus("預約失敗"); 
+        if(data.error === "SLOT_TAKEN") await loadSlots();
+        return;
+      }
+
+      alert(`預約成功 ✅\n${data.summary}`);
+      setStatus("預約成功，更新空檔中...");
+      await loadSlots();
+    }
+
+    // init
+    elDate.value = fmt(new Date());
+    document.getElementById("btnToday").onclick = ()=> elDate.value = fmt(new Date());
+    document.getElementById("btnTomorrow").onclick = ()=>{
+      const d = new Date(); d.setDate(d.getDate()+1); elDate.value = fmt(d);
+    };
+    document.getElementById("btnLoad").onclick = loadSlots;
+
+    initLIFF();
+  </script>
+</body>
+</html>
